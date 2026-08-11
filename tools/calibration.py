@@ -4,7 +4,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, simpledialog
 
-from core.ui.screen import count_matching_pixels, sample_pixel
+from core.ui.screen import capture_region, count_matching_pixels_in_image, sample_pixel, save_debug_image
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "core" / "ui" / "screen_config.py"
 
@@ -53,6 +53,12 @@ def build_region(first, second):
     return Region(left, top, right - left + 1, bottom - top + 1)
 
 
+def describe_colours(image, limit=6):
+    """Summarise the most common colours in a capture, for working out what the stars are actually made of."""
+    colours = sorted(image.convert("RGB").getcolors(maxcolors=1 << 24), reverse=True)
+    return ", ".join(f"{colour}x{count}" for count, colour in colours[:limit])
+
+
 def calculate_star_increments(full_pixels, full_rating, half_pixels, half_rating):
     if full_rating <= 0 or not math.isclose(full_rating, round(full_rating), abs_tol=1e-6):
         raise ValueError(f"Expected a whole-number full-star rating, got {full_rating!r}")
@@ -62,6 +68,11 @@ def calculate_star_increments(full_pixels, full_rating, half_pixels, half_rating
     doubled_half = round(half_rating * 2)
     if not math.isclose(half_rating * 2, doubled_half, abs_tol=1e-6) or doubled_half % 2 == 0:
         raise ValueError(f"Expected a half-star rating ending in .5, got {half_rating!r}")
+
+    if full_pixels <= 0:
+        raise ValueError("The whole-star sample contained no star-coloured pixels")
+    if half_pixels <= 0:
+        raise ValueError("The half-star sample contained no star-coloured pixels")
 
     pixels_per_full_star = full_pixels / int(round(full_rating))
     completed_stars = math.floor(half_rating)
@@ -241,11 +252,19 @@ class CalibrationApp:
         self.root.lift()
         self.root.focus_force()
 
-    def run_without_overlay(self, callback):
+    def wait_until_hidden(self, timeout=1.5, interval=0.05):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.root.update_idletasks()
+            self.root.update()
+            if not self.root.winfo_viewable():
+                return
+            time.sleep(interval)
+
+    def run_without_overlay(self, callback, settle=0.35):
         self.root.withdraw()
-        self.root.update_idletasks()
-        self.root.update()
-        time.sleep(0.2)
+        self.wait_until_hidden()
+        time.sleep(settle)
         try:
             return callback()
         finally:
@@ -260,14 +279,35 @@ class CalibrationApp:
 
     def sample_star_pixels(self, top_left_key, bottom_right_key):
         region = build_region(self.clicks[top_left_key], self.clicks[bottom_right_key]).as_tuple()
-        yellow_pixels = self.run_without_overlay(lambda: count_matching_pixels(region, STAR_COLOUR))
+        label = top_left_key.replace("_top_left", "")
+
+        yellow_pixels = self.capture_and_count(region, label)
+        if yellow_pixels == 0:
+            print(f"No star-coloured pixels in {region}, retrying with a longer settle...", flush=True)
+            yellow_pixels = self.capture_and_count(region, f"{label}_retry", settle=1.0)
+
         return region, yellow_pixels
+
+    def capture_and_count(self, region, label, settle=0.35):
+        """Grab the whole screen once, then save both the screen and the cropped region for inspection."""
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        screen = self.run_without_overlay(lambda: capture_region((0, 0, screen_width, screen_height)), settle=settle)
+
+        left, top, width, height = region
+        crop = screen.crop((left, top, left + width, top + height))
+        screen_path = save_debug_image(screen, f"{label}_screen")
+        crop_path = save_debug_image(crop, f"{label}_region")
+        print(f"Saved {screen_path} and {crop_path}", flush=True)
+        print(f"Most common colours in {label}: {describe_colours(crop)}", flush=True)
+
+        return count_matching_pixels_in_image(crop, STAR_COLOUR)
 
     def ask_star_rating(self, title, prompt, *, whole_number):
         while True:
             rating = simpledialog.askfloat(title, prompt, parent=self.root, minvalue=0.5, maxvalue=5.0)
             if rating is None:
-                continue
+                return None
 
             doubled = round(rating * 2)
             if not math.isclose(rating * 2, doubled, abs_tol=1e-6):
@@ -300,17 +340,27 @@ class CalibrationApp:
             self.prompt_for_continue_colour()
         elif key == "full_star_sample_bottom_right":
             region, self.full_star_pixels = self.sample_star_pixels("full_star_sample_top_left", "full_star_sample_bottom_right")
+            if not self.reject_empty_star_sample(region, "whole-star"):
+                return
             self.full_star_rating = self.ask_star_rating(
                 "Whole-Star Sample Rating", "Enter the displayed whole-number rating for this sample, such as 2 or 4.", whole_number=True
             )
+            if self.full_star_rating is None:
+                self.undo_star_sample()
+                return
             print(f"Sampled whole-star region {region}: rating={self.full_star_rating} yellow_pixels={self.full_star_pixels}", flush=True)
         elif key == "half_star_sample_bottom_right":
             region, self.half_star_pixels = self.sample_star_pixels("half_star_sample_top_left", "half_star_sample_bottom_right")
+            if not self.reject_empty_star_sample(region, "half-star"):
+                return
             self.half_star_rating = self.ask_star_rating(
                 "Half-Star Sample Rating",
                 "Enter the displayed rating for this sample, including the half star, such as 2.5 or 4.5.",
                 whole_number=False,
             )
+            if self.half_star_rating is None:
+                self.undo_star_sample()
+                return
             print(f"Sampled half-star region {region}: rating={self.half_star_rating} yellow_pixels={self.half_star_pixels}", flush=True)
         elif key == "continue_colour_sample":
             self.continue_colour = self.sample_continue_colour()
@@ -322,7 +372,33 @@ class CalibrationApp:
         if len(self.history) == len(STEPS):
             self.finish()
 
+    def reject_empty_star_sample(self, region, description):
+        sampled = self.full_star_pixels if description == "whole-star" else self.half_star_pixels
+        if sampled:
+            return True
+
+        messagebox.showerror(
+            "Empty sample",
+            (
+                f"No star-coloured pixels were found in the {description} region {region}.\n\n"
+                "Check that the region covers the yellow stars and that FM is visible behind this overlay, "
+                "then select the two corners again."
+            ),
+            parent=self.root,
+        )
+        self.undo_star_sample()
+        return False
+
+    def undo_star_sample(self):
+        """Roll back both corner clicks of the sample being recorded."""
+        self.undo_last()
+        self.undo_last()
+        self.update_instruction()
+
     def on_right_click(self, _event):
+        self.undo_last()
+
+    def undo_last(self):
         if not self.history:
             return
 

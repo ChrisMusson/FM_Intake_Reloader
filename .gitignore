@@ -5,3 +5,4 @@ __pycache__/
 *.html
 .ruff_cache
 .cache/
+calibration_debug/

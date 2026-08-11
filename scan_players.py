@@ -6,11 +6,13 @@ from core.scouting.html import build_sortable_table_html
 from core.scouting.money import format_currency, parse_money_text
 from core.scouting.players.role_scoring import filter_players_for_roles, score_players_for_roles
 from core.scouting.players.roles import ROLE
+from core.scouting.players.shortlist import append_current_squad_players
 from core.scouting.shortlists import load_shortlist_table
 
 SHORTLIST_PATH = "player_shortlist.html"
 OUTPUT_PATH = "player_table.html"
 EXTRA_COLUMNS = ["Value", "CA", "PA"]
+INCLUDE_CURRENT_SQUAD_PLAYERS = False  # add all current club players from memory even if they are not in the shortlist export
 ROLES = [
     ROLE.SWEEPER_KEEPER.DEFEND,
     ROLE.FULL_BACK.ATTACK,
@@ -32,6 +34,8 @@ def main():
         SHORTLIST_PATH, uid_error="player shortlist HTML must include a UID column in the exported player search view", leading_columns_to_drop=2
     )
     players_df = players_df.merge(build_shortlist_player_table(players_df, process), on="UID")
+    if INCLUDE_CURRENT_SQUAD_PLAYERS:
+        players_df, _added_uids = append_current_squad_players(players_df, process)
     players_df = score_players_for_roles(players_df, ROLES)
     players_df = filter_players_for_roles(players_df, ROLES, target_n=TARGET_PLAYER_COUNT, filter_type="roles")
     value_sort_values = players_df["Value"].astype("Int64").tolist()
@@ -58,7 +62,7 @@ def main():
     html = build_sortable_table_html(
         players_df,
         title="FM Player Scan",
-        subtitle=f"{len(players_df):,} shortlisted players scored across {len(ROLES)} selected roles.",
+        subtitle=f"{len(players_df):,} players scored across {len(ROLES)} selected roles.",
         roles=ROLES,
         score_columns=role_columns,
         default_sort_column="Value",

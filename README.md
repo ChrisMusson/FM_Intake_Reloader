@@ -14,6 +14,7 @@ The scripts you are meant to run live at the repo root. Everything in `core/` is
 1. Install `uv`.
 2. Run `uv sync` from the repo root.
 3. Keep Football Manager open while using any script that reads memory.
+4. Before you run `preview_day.py` or `intake_day.py`, calibrate your screen once. See the "Preview / Intake Reloading" section below. The values committed in `core/ui/screen_config.py` are for one specific display and will not match yours.
 
 On Linux, install `spectacle` for screenshots:
 
@@ -90,7 +91,9 @@ Use `scan_players.py` when you want a sortable player report for specific roles.
 1. In Football Manager, open player search.
 2. Add `UID` to the view.
 3. Export the results as a web page and save it as `player_shortlist.html` in the repo root.
-4. Open `scan_players.py` and edit the `ROLES` list if needed.
+4. Open `scan_players.py` and edit the config block if needed:
+   - `INCLUDE_CURRENT_SQUAD_PLAYERS` to add every player found in the current club's known squad buckets from memory
+   - `ROLES`
 5. Run `uv run scan_players.py`.
 6. Open `player_table.html`.
 

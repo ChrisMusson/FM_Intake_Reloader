@@ -13,6 +13,8 @@ from PIL import Image
 from core.platform import IS_WINDOWS
 from core.ui.screen_config import RATINGS, STARS
 
+DEBUG_CAPTURE_DIR = Path(__file__).resolve().parents[2] / "calibration_debug"
+
 
 def _linux_capture_commands(path):
     commands = []
@@ -92,8 +94,20 @@ def _count_matching_pixels_in_array(pixels, colour, tolerance=40):
 
 
 def count_matching_pixels(region, colour, tolerance=40):
-    pixels = np.asarray(capture_region(region), dtype=np.uint8)
+    return count_matching_pixels_in_image(capture_region(region), colour, tolerance=tolerance)
+
+
+def count_matching_pixels_in_image(image, colour, tolerance=40):
+    pixels = np.asarray(image, dtype=np.uint8)
     return _count_matching_pixels_in_array(pixels, colour, tolerance=tolerance)
+
+
+def save_debug_image(image, label, directory=DEBUG_CAPTURE_DIR):
+    """Write a capture to disk so a failed sample can be inspected afterwards."""
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{label}.png"
+    image.save(path)
+    return path
 
 
 def guess_star_rating(yellow_pixels, half_increment=STARS.half_increment, full_increment=STARS.full_increment):
