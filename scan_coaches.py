@@ -68,6 +68,8 @@ def main():
         column_sort_values=column_sort_values,
         score_style_min=0,
         score_style_max=300,
+        score_colour_min=0,
+        score_colour_max=300,
     )
     with open(OUTPUT_PATH, "w", encoding="utf-8") as output_file:
         output_file.write(html)

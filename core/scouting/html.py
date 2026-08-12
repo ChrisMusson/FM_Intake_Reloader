@@ -5,11 +5,25 @@ import json
 
 import pandas as pd
 
+# Cell styling is keyed off column names, not positions, because the exported view decides which columns exist.
+# Anything not listed here renders as plain text in the body font.
+NUMERIC_COLUMNS = ("Age", "Wage", "Value", "CA", "PA")  # right-aligned
+MONOSPACE_COLUMNS = ("Wage", "Value", "CA", "PA")  # figures worth lining up digit by digit, as are the role scores
+
 
 def _display_cell(value):
     if pd.isna(value):
         return ""
     return html.escape(str(value))
+
+
+def _column_class(column):
+    classes = [
+        "numeric-cell" if column in NUMERIC_COLUMNS else "",
+        "mono-cell" if column in MONOSPACE_COLUMNS else "",
+    ]
+    applied = [css_class for css_class in classes if css_class]
+    return f' class="{" ".join(applied)}"' if applied else ""
 
 
 def _role_toggle_html(role, column_index):
@@ -53,7 +67,8 @@ def _build_numeric_filters(dataframe, column_sort_values=None):
 
 def _build_table_html(dataframe, column_sort_values=None):
     column_sort_values = column_sort_values or {}
-    header_html = "".join(f"<th>{html.escape(str(column))}</th>" for column in dataframe.columns)
+    column_classes = {column: _column_class(column) for column in dataframe.columns}
+    header_html = "".join(f"<th{column_classes[column]}>{html.escape(str(column))}</th>" for column in dataframe.columns)
     body_rows = []
 
     for row_index, (_, row) in enumerate(dataframe.iterrows()):
@@ -62,7 +77,7 @@ def _build_table_html(dataframe, column_sort_values=None):
             sort_values = column_sort_values.get(column)
             sort_value = sort_values[row_index] if sort_values is not None else None
             data_order = "" if sort_value is None or pd.isna(sort_value) else f' data-order="{html.escape(str(sort_value))}"'
-            cells.append(f"<td{data_order}>{_display_cell(row[column])}</td>")
+            cells.append(f"<td{column_classes[column]}{data_order}>{_display_cell(row[column])}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
 
     return (
@@ -79,8 +94,14 @@ def build_sortable_table_html(
     score_columns=(),
     default_sort_column=None,
     column_sort_values=None,
-    score_style_min=35,
-    score_style_max=75,
+    # Scores run 0-100, but the bar covers 20-85: below 20 is unplayable and above 85 is elite either
+    # way, so spending the bar's travel on those ends only flattens the differences that matter.
+    score_style_min=20,
+    score_style_max=85,
+    # The colour ramp keeps its own tighter range, so most players sit in the part of the gradient
+    # where the differences are visible. Reports scoring on another scale should set both ranges.
+    score_colour_min=35,
+    score_colour_max=75,
 ):
     if dataframe.empty:
         raise ValueError("Cannot build a player scan report from an empty dataframe")
@@ -480,16 +501,19 @@ def build_sortable_table_html(
             background-color: rgba(25, 41, 58, 0.98) !important;
         }}
 
-        table.dataTable.report-table tbody td:nth-child(4),
-        table.dataTable.report-table tbody td:nth-child(8),
+        table.dataTable.report-table tbody td {{
+            font-family: "Space Grotesk", "Segoe UI", sans-serif;
+        }}
+
+        table.dataTable.report-table tbody td.mono-cell,
         table.dataTable.report-table tbody td.score-cell {{
             font-family: "JetBrains Mono", monospace;
             font-weight: 600;
         }}
 
-        table.dataTable.report-table tbody td:nth-child(5) {{
-            font-weight: 700;
-            color: #f8fbff;
+        table.dataTable.report-table thead th.numeric-cell,
+        table.dataTable.report-table tbody td.numeric-cell {{
+            text-align: right;
         }}
 
         table.dataTable.report-table tbody td.score-cell {{
@@ -555,6 +579,13 @@ def build_sortable_table_html(
         const numericFilters = {json.dumps(numeric_filters)};
         const scoreStyleMin = {json.dumps(score_style_min)};
         const scoreStyleMax = {json.dumps(score_style_max)};
+        const scoreColourMin = {json.dumps(score_colour_min)};
+        const scoreColourMax = {json.dumps(score_colour_max)};
+
+        function scoreIntensity(rawScore, minimum, maximum) {{
+            const clamped = Math.max(minimum, Math.min(maximum, rawScore));
+            return (clamped - minimum) / Math.max(1, maximum - minimum);
+        }}
 
         function applyScoreStyling(table) {{
             scoreColumnIndexes.forEach((columnIndex) => {{
@@ -568,12 +599,11 @@ def build_sortable_table_html(
                         return;
                     }}
 
-                    const clamped = Math.max(scoreStyleMin, Math.min(scoreStyleMax, rawScore));
-                    const range = Math.max(1, scoreStyleMax - scoreStyleMin);
-                    const intensity = (clamped - scoreStyleMin) / range;
-                    const hue = 8 + intensity * 120;
-                    const alpha = 0.16 + intensity * 0.22;
-                    const stop = 24 + intensity * 60;
+                    const intensity = scoreIntensity(rawScore, scoreStyleMin, scoreStyleMax);
+                    const colourIntensity = scoreIntensity(rawScore, scoreColourMin, scoreColourMax);
+                    const hue = 8 + colourIntensity * 120;
+                    const alpha = 0.16 + colourIntensity * 0.22;
+                    const stop = intensity * 100;
                     cell.style.backgroundImage = `linear-gradient(90deg, hsla(${{hue}}, 88%, 58%, ${{alpha}}) 0%, hsla(${{hue}}, 88%, 58%, ${{alpha}}) ${{stop}}%, rgba(0, 0, 0, 0) ${{stop}}%)`;
                 }});
             }});

@@ -4,7 +4,7 @@ import pandas as pd
 
 from core.memory.cache import get_cached_or_compute
 from core.memory.person import PERSON_UID_OFFSET, read_person_age, read_person_name
-from core.memory.process import iter_pattern_matches, read_chained_string, read_chained_value, read_uint
+from core.memory.process import get_fm_base_address, iter_pattern_matches, read_chained_string, read_chained_value, read_uint
 from core.scouting.players.attributes import SCAN_ATTRIBUTES
 from core.scouting.players.positions import format_player_positions
 
@@ -107,19 +107,39 @@ def read_player_profile(process, person_address, fm_base_address):
         return EMPTY_PLAYER_PROFILE.copy()
 
 
-def build_shortlist_player_table(shortlist_df, process):
-    ordered_uids = [None if pd.isna(uid) else int(uid) for uid in shortlist_df["UID"].astype("Int64")]
+def _build_uid_table(process, ordered_uids, cache_key, columns, read_row):
+    """Read one row per UID, caching the whole table so repeated runs on the same UIDs skip the memory reads."""
 
     def build_rows():
         person_addresses = scan_player_person_addresses(process)
-        rows = []
+        return [{"UID": uid, **read_row(person_addresses.get(uid))} for uid in ordered_uids]
 
-        for uid_int in ordered_uids:
-            snapshot = read_player_snapshot(process, person_addresses.get(uid_int))
-            rows.append({"UID": uid_int, **snapshot})
+    rows, _cache_hit = get_cached_or_compute(process, cache_key, key_parts={"uids": ordered_uids}, builder=build_rows)
 
-        return rows
+    return pd.DataFrame(rows, columns=["UID", *columns]).astype({"UID": "Int64"})
 
-    rows, _cache_hit = get_cached_or_compute(process, "player_shortlist_rows", key_parts={"uids": ordered_uids}, builder=build_rows)
 
-    return pd.DataFrame(rows).astype({"UID": "Int64"})
+def build_shortlist_player_table(shortlist_df, process):
+    """Read the scouting columns (CA, PA, Value, attributes) for every UID in an exported shortlist."""
+    ordered_uids = [None if pd.isna(uid) else int(uid) for uid in shortlist_df["UID"].astype("Int64")]
+
+    return _build_uid_table(
+        process,
+        ordered_uids,
+        "player_shortlist_rows",
+        EMPTY_PLAYER_SNAPSHOT,
+        lambda person_address: read_player_snapshot(process, person_address),
+    )
+
+
+def build_shortlist_player_profile_table(uids, process):
+    """Read the descriptive columns (Nat, Club, Age, Position, Wage) for a specific set of UIDs."""
+    fm_base_address = get_fm_base_address(process)
+
+    return _build_uid_table(
+        process,
+        [int(uid) for uid in uids],
+        "player_shortlist_profiles",
+        EMPTY_PLAYER_PROFILE,
+        lambda person_address: read_player_profile(process, person_address, fm_base_address),
+    )
