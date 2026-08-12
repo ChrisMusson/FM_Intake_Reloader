@@ -2,11 +2,16 @@
 
 import ctypes
 import ctypes.util
+import functools
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core.platform import IS_WINDOWS
 
 FM_EXE_PATH_FRAGMENT = "/Football Manager 2024/fm.exe"
+SCAN_CHUNK_SIZE = 0x200000
+SCAN_WORKER_COUNT = 4  # process_vm_readv saturates well before this; more threads only add contention
 
 
 class IOVec(ctypes.Structure):
@@ -62,6 +67,12 @@ class LinuxFmProcess:
             err = ctypes.get_errno()
             raise OSError(err, f"process_vm_readv returned {bytes_read} bytes, expected {size}")
         return bytes(buffer.raw)
+
+    def read_into(self, pointer, address, size):
+        """Read straight into a caller-owned buffer and report success, rather than allocating a fresh one per call."""
+        local = IOVec(pointer, size)
+        remote = IOVec(ctypes.c_void_p(address), size)
+        return self._readv(self.pid, ctypes.byref(local), 1, ctypes.byref(remote), 1, 0) == size
 
 
 def _find_linux_fm_pid():
@@ -160,15 +171,26 @@ def follow_pointer_chain(process, base_address, *offsets):
     return current
 
 
-def iter_pattern_matches(
-    process, pattern, *, writable=None, executable=None, private=None, chunk_size=0x200000
-):
-    if IS_WINDOWS:
-        for address in process.pattern_scan_all(pattern, return_multiple=True):
-            yield int(address)
-        return
+class _ScanBuffer:
+    """A reusable read target. Searching it in place keeps a full-heap scan from copying every chunk twice."""
 
-    overlap = len(pattern) - 1
+    def __init__(self, size):
+        self.data = bytearray(size)
+        self.pointer = ctypes.cast((ctypes.c_char * size).from_buffer(self.data), ctypes.c_void_p)
+
+
+_scan_state = threading.local()
+
+
+def _get_scan_buffer(size):
+    buffer = getattr(_scan_state, "buffer", None)
+    if buffer is None or len(buffer.data) < size:
+        buffer = _scan_state.buffer = _ScanBuffer(size)
+    return buffer
+
+
+def _iter_scan_chunks(process, tail, *, chunk_size, writable, executable, private):
+    """Split the matching regions into chunks, each carrying the tail bytes a match at its far edge still needs."""
     for start, end, perms, _path in process.iter_memory_regions():
         if "r" not in perms:
             continue
@@ -179,23 +201,50 @@ def iter_pattern_matches(
         if private is not None and (perms[3] == "p") != private:
             continue
 
-        carry = b""
         address = start
         while address < end:
             size = min(chunk_size, end - address)
-            try:
-                data = carry + process.read_bytes(address, size)
-            except OSError:
-                break
-
-            base = address - len(carry)
-            search_from = 0
-            while True:
-                index = data.find(pattern, search_from)
-                if index == -1:
-                    break
-                yield base + index
-                search_from = index + 1
-
-            carry = data[-overlap:] if overlap > 0 else b""
+            yield address, size, min(tail, end - address - size)
             address += size
+
+
+def _scan_chunk(process, pattern, window, chunk):
+    address, size, tail = chunk
+    buffer = _get_scan_buffer(size + tail)
+    if not process.read_into(buffer.pointer, address, size + tail):
+        return ()
+
+    data = buffer.data
+    limit = size + tail
+    matches = []
+    index = data.find(pattern, 0, limit)
+    while index != -1 and index < size:  # a match past `size` belongs to the next chunk, which reads it as its own
+        if not window:
+            matches.append(address + index)
+        elif index + window <= limit:
+            matches.append((address + index, bytes(data[index : index + window])))
+        index = data.find(pattern, index + 1, limit)
+
+    return matches
+
+
+def iter_pattern_matches(
+    process, pattern, *, window=0, writable=None, executable=None, private=None, chunk_size=SCAN_CHUNK_SIZE, workers=SCAN_WORKER_COUNT
+):
+    """Yield every address matching `pattern`, or `(address, bytes)` pairs when `window` bytes of context are wanted.
+
+    Asking for a window saves a follow-up read per match: the bytes are already in the scan buffer.
+    """
+    if IS_WINDOWS:
+        for address in process.pattern_scan_all(pattern, return_multiple=True):
+            address = int(address)
+            yield (address, process.read_bytes(address, window)) if window else address
+        return
+
+    tail = max(len(pattern), window) - 1
+    chunks = list(_iter_scan_chunks(process, tail, chunk_size=chunk_size, writable=writable, executable=executable, private=private))
+    scan_chunk = functools.partial(_scan_chunk, process, pattern, window)
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for matches in executor.map(scan_chunk, chunks):
+            yield from matches

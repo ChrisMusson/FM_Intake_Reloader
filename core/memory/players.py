@@ -44,11 +44,12 @@ def scan_player_person_addresses(process, *, refresh=False):
     def build_person_addresses():
         people = {}
 
-        for person_address in iter_pattern_matches(process, PLAYER_OBJECT_SCAN_PATTERN, writable=True, executable=False, private=True):
-            try:
-                uid = read_uint(process, person_address + PERSON_UID_OFFSET, 4)
-            except Exception:
-                continue
+        # The UID sits a few bytes past the pattern, so ask the scan for it rather than reading each match back.
+        matches = iter_pattern_matches(
+            process, PLAYER_OBJECT_SCAN_PATTERN, window=PERSON_UID_OFFSET + 4, writable=True, executable=False, private=True
+        )
+        for person_address, header in matches:
+            uid = int.from_bytes(header[PERSON_UID_OFFSET:], byteorder="little")
             if uid > 0:
                 people[uid] = person_address
 
@@ -66,7 +67,8 @@ def read_optional_uint(process, address, size):
     return None if value == UNSET_UINT32 else value
 
 
-def read_player_snapshot(process, person_address):
+def read_player_snapshot(process, person_address, *, include_name=True):
+    """Read one player's scouting figures. A name costs three chained reads, so callers that already have one skip it."""
     if person_address is None:
         return EMPTY_PLAYER_SNAPSHOT.copy()
 
@@ -74,7 +76,7 @@ def read_player_snapshot(process, person_address):
         player_address = person_address - PERSON_OBJECT_OFFSET
         attributes = list(process.read_bytes(player_address + PLAYER_ATTRIBUTE_OFFSET, len(SCAN_ATTRIBUTES)))
         return {
-            "Memory Name": read_person_name(process, person_address),
+            "Memory Name": read_person_name(process, person_address) if include_name else None,
             "CA": read_uint(process, player_address + PLAYER_CA_OFFSET, 2),
             "PA": read_uint(process, player_address + PLAYER_PA_OFFSET, 2),
             "Value": read_optional_uint(process, player_address + PLAYER_VALUE_OFFSET, 4),
@@ -107,14 +109,15 @@ def read_player_profile(process, person_address, fm_base_address):
         return EMPTY_PLAYER_PROFILE.copy()
 
 
-def _build_uid_table(process, ordered_uids, cache_key, columns, read_row):
+def _build_uid_table(process, ordered_uids, cache_key, columns, read_row, extra_key_parts=None):
     """Read one row per UID, caching the whole table so repeated runs on the same UIDs skip the memory reads."""
 
     def build_rows():
         person_addresses = scan_player_person_addresses(process)
-        return [{"UID": uid, **read_row(person_addresses.get(uid))} for uid in ordered_uids]
+        return [{"UID": uid, **read_row(uid, person_addresses.get(uid))} for uid in ordered_uids]
 
-    rows, _cache_hit = get_cached_or_compute(process, cache_key, key_parts={"uids": ordered_uids}, builder=build_rows)
+    key_parts = {"uids": ordered_uids, **(extra_key_parts or {})}
+    rows, _cache_hit = get_cached_or_compute(process, cache_key, key_parts=key_parts, builder=build_rows)
 
     return pd.DataFrame(rows, columns=["UID", *columns]).astype({"UID": "Int64"})
 
@@ -123,12 +126,17 @@ def build_shortlist_player_table(shortlist_df, process):
     """Read the scouting columns (CA, PA, Value, attributes) for every UID in an exported shortlist."""
     ordered_uids = [None if pd.isna(uid) else int(uid) for uid in shortlist_df["UID"].astype("Int64")]
 
+    # The export names nearly every player it lists, so only the gaps are worth a chained name read.
+    unnamed = shortlist_df["Name"].isna() if "Name" in shortlist_df.columns else pd.Series(True, index=shortlist_df.index)
+    unnamed_uids = {uid for uid, is_unnamed in zip(ordered_uids, unnamed, strict=True) if is_unnamed}
+
     return _build_uid_table(
         process,
         ordered_uids,
         "player_shortlist_rows",
         EMPTY_PLAYER_SNAPSHOT,
-        lambda person_address: read_player_snapshot(process, person_address),
+        lambda uid, person_address: read_player_snapshot(process, person_address, include_name=uid in unnamed_uids),
+        extra_key_parts={"unnamed_uids": sorted(unnamed_uids - {None})},
     )
 
 
@@ -141,5 +149,5 @@ def build_shortlist_player_profile_table(uids, process):
         [int(uid) for uid in uids],
         "player_shortlist_profiles",
         EMPTY_PLAYER_PROFILE,
-        lambda person_address: read_player_profile(process, person_address, fm_base_address),
+        lambda _uid, person_address: read_player_profile(process, person_address, fm_base_address),
     )
