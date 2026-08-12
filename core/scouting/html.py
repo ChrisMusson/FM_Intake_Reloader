@@ -18,10 +18,7 @@ def _display_cell(value):
 
 
 def _column_class(column):
-    classes = [
-        "numeric-cell" if column in NUMERIC_COLUMNS else "",
-        "mono-cell" if column in MONOSPACE_COLUMNS else "",
-    ]
+    classes = ["numeric-cell" if column in NUMERIC_COLUMNS else "", "mono-cell" if column in MONOSPACE_COLUMNS else ""]
     applied = [css_class for css_class in classes if css_class]
     return f' class="{" ".join(applied)}"' if applied else ""
 

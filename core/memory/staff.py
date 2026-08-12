@@ -81,14 +81,14 @@ def scan_staff_person_addresses(process, *, refresh=False):
 
         return people
 
-    person_addresses, _cache_hit = get_cached_or_compute(process, "staff_person_addresses", key_parts={}, builder=build_person_addresses, refresh=refresh)
+    person_addresses, _cache_hit = get_cached_or_compute(
+        process, "staff_person_addresses", key_parts={}, builder=build_person_addresses, refresh=refresh
+    )
     cache["person_addresses"] = person_addresses
     return person_addresses
 
 
-def read_staff_snapshot(
-    process, person_address, fm_base_address, *, person_object_offset=STAFF_PERSON_OBJECT_OFFSET
-):
+def read_staff_snapshot(process, person_address, fm_base_address, *, person_object_offset=STAFF_PERSON_OBJECT_OFFSET):
     if person_address is None:
         return EMPTY_STAFF_SNAPSHOT.copy()
 
@@ -158,7 +158,9 @@ def build_staff_table_for_uids(uids, process):
 
 
 def build_staff_table_for_staff_addresses(staff_addresses, process):
-    ordered_staff_addresses = [int(staff_address) for staff_address in pd.Series(list(staff_addresses), dtype="Int64").drop_duplicates() if not pd.isna(staff_address)]
+    ordered_staff_addresses = [
+        int(staff_address) for staff_address in pd.Series(list(staff_addresses), dtype="Int64").drop_duplicates() if not pd.isna(staff_address)
+    ]
 
     def build_rows():
         fm_base_address = get_staff_fm_base_address(process)
@@ -166,7 +168,9 @@ def build_staff_table_for_staff_addresses(staff_addresses, process):
 
         for staff_address in ordered_staff_addresses:
             person_address = staff_address + STAFF_PERSON_OBJECT_OFFSET
-            rows.append({"UID": read_uint(process, person_address + PERSON_UID_OFFSET, 4), **read_staff_snapshot(process, person_address, fm_base_address)})
+            rows.append(
+                {"UID": read_uint(process, person_address + PERSON_UID_OFFSET, 4), **read_staff_snapshot(process, person_address, fm_base_address)}
+            )
 
         return rows
 

@@ -2,8 +2,8 @@
 
 from collections import namedtuple
 
-from core.scouting.players.attributes import ATTRIBUTE, Attribute
-from core.scouting.players.roles import ROLE, Role
+from core.scouting.players.attributes import ATTRIBUTE
+from core.scouting.players.roles import ROLE
 
 
 class RoleDefinition(namedtuple("RoleDefinitionBase", "key green blue")):

@@ -2,9 +2,8 @@
 
 import pandas as pd
 
-from core.scouting.players.attributes import Attribute
-from core.scouting.players.role_definitions import ROLE_DEFINITIONS, RoleDefinition
-from core.scouting.players.roles import Role, parse_role
+from core.scouting.players.role_definitions import ROLE_DEFINITIONS
+from core.scouting.players.roles import parse_role
 
 KEY_WEIGHT = 5
 GREEN_WEIGHT = 3

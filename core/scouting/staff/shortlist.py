@@ -1,7 +1,5 @@
 """Helpers for building normalised staff scouting tables from shortlist exports."""
 
-import pandas as pd
-
 from core.memory.staff import build_current_club_staff_table, build_staff_shortlist_table
 from core.scouting.shortlists import approved_shortlist_columns, coalesce_columns, load_shortlist_table
 
