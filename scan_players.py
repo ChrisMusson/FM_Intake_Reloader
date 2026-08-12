@@ -31,7 +31,7 @@ TARGET_PLAYER_COUNT = 2000
 def main():
     process = open_fm_process()
     players_df = load_shortlist_table(
-        SHORTLIST_PATH, uid_error="player shortlist HTML must include a UID column in the exported player search view", leading_columns_to_drop=2
+        SHORTLIST_PATH, uid_error="player shortlist HTML must include a UID column in the exported player search view"
     )
     players_df = players_df.merge(build_shortlist_player_table(players_df, process), on="UID")
     if INCLUDE_CURRENT_SQUAD_PLAYERS:

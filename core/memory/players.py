@@ -21,6 +21,7 @@ PERSON_NATIONALITY_CODE_CHAIN = (0x70, 0x28)
 PERSON_CLUB_NAME_CHAIN = (0xC8, 0x10, 0x30, 0xC8)
 PERSON_WAGE_CHAIN = (0xC8,)
 PERSON_WAGE_OFFSET = 0x18
+UNSET_UINT32 = 0xFFFFFFFF  # FM stores "no value recorded" as an all-bits-set integer
 EMPTY_PLAYER_PROFILE = {"Nat": None, "Club": None, "Age": None, "Position": None, "Wage": None}
 EMPTY_PLAYER_SNAPSHOT = {"Memory Name": None, "CA": None, "PA": None, "Value": None, **{attribute.value: None for attribute in SCAN_ATTRIBUTES}}
 _PLAYER_PROCESS_CACHE = {}
@@ -60,6 +61,11 @@ def scan_player_person_addresses(process, *, refresh=False):
     return person_addresses
 
 
+def read_optional_uint(process, address, size):
+    value = read_uint(process, address, size)
+    return None if value == UNSET_UINT32 else value
+
+
 def read_player_snapshot(process, person_address):
     if person_address is None:
         return EMPTY_PLAYER_SNAPSHOT.copy()
@@ -71,7 +77,7 @@ def read_player_snapshot(process, person_address):
             "Memory Name": read_person_name(process, person_address),
             "CA": read_uint(process, player_address + PLAYER_CA_OFFSET, 2),
             "PA": read_uint(process, player_address + PLAYER_PA_OFFSET, 2),
-            "Value": read_uint(process, player_address + PLAYER_VALUE_OFFSET, 4),
+            "Value": read_optional_uint(process, player_address + PLAYER_VALUE_OFFSET, 4),
             **{attribute.value: int(value) for attribute, value in zip(SCAN_ATTRIBUTES, attributes, strict=True)},
         }
     except Exception:
@@ -95,7 +101,7 @@ def read_player_profile(process, person_address, fm_base_address):
             "Club": read_chained_string(process, person_address, list(PERSON_CLUB_NAME_CHAIN), 0x4, size=64),
             "Age": read_person_age(process, person_address, fm_base_address),
             "Position": read_player_positions(process, person_address),
-            "Wage": None if wage is None else f"£{wage:,} p/w",
+            "Wage": None if wage is None or wage == UNSET_UINT32 else f"£{wage:,} p/w",
         }
     except Exception:
         return EMPTY_PLAYER_PROFILE.copy()

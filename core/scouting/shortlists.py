@@ -4,11 +4,12 @@ import pandas as pd
 
 from core.uids import normalise_uid
 
+IGNORED_SHORTLIST_COLUMNS = ["Rec", "Inf"]  # FM's recommendation and information columns
 
-def load_shortlist_table(path, *, uid_error, leading_columns_to_drop=0):
+
+def load_shortlist_table(path, *, uid_error):
     shortlist_df = pd.read_html(path, encoding="utf-8")[0].dropna(how="all")
-    if leading_columns_to_drop:
-        shortlist_df = shortlist_df[shortlist_df.columns[leading_columns_to_drop:]]
+    shortlist_df = shortlist_df.drop(columns=IGNORED_SHORTLIST_COLUMNS, errors="ignore")
     if "UID" not in shortlist_df.columns:
         raise ValueError(uid_error)
 
